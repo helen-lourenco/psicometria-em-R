@@ -1,0 +1,399 @@
+---
+title: "Lista 1 - Psicometria em R"
+subtitle: "Programa de Pós Graduação em Bioestatística - UEM"
+author: "Helen Eduarda dos Santos Lourenço"
+output: rmdformats::robobook
+---
+
+# Pacotes utilizados
+
+```{r echo = T, message = F, warning = F}
+library(dplyr)
+library(lavaan)
+library(knitr)
+library(kableExtra)
+library(haven)
+```
+
+# 1.1 Obtenção da matriz de covariância a partir de erros-padrões e correlações
+
+Para calcular o desvio-padrão de cada composição, multiplicamos o erro-padrão correspondente por $\sqrt{n}$ (onde $n = 212$), operação que é justificada pelas propriedades da distribuição da média amostral.
+
+Em uma amostra aleatória de tamanho $n$, com observações independentes e variância populacional $\sigma^2$, a variância da média amostral é dada por $\operatorname{Var}(\bar{X}) = \frac{\sigma^2}{n}$.
+
+Extraindo a raiz quadrada de ambos os lados da equação, obtemos a relação direta entre o erro-padrão da média e o desvio-padrão da amostra:
+
+$$EP(\bar{X}) = \frac{DP(X)}{\sqrt{n}}.$$
+
+Isolando o desvio-padrão,
+
+$$DP(X) = EP(\bar{X}) \cdot \sqrt{n}.$$
+
+De tal forma, adicionei a tabela fornecida no exercício ao R, e multipliquei cada um dos erros-padrão de $\bar{X}$ por $\sqrt{212}$, obtendo os desvios-padrão de $X$:
+
+```{r echo = TRUE}
+# Criando a tabela com erros-padrão da média
+composicao <- c(
+  "MC (kg)",
+  "IMC (kg/m²)",
+  "CB (cm)",
+  "CC (cm)",
+  "CP (cm)",
+  "DCP (mm)",
+  "DCT (mm)",
+  "DCS (mm)"
+)
+
+ep_media <- c(1.05, 0.3, 0.29, 0.81, 0.26, 0.51, 0.44, 0.47)
+
+tab_ep <- data.frame(composicao, ep_media)
+
+# Calculando os desvios-padrão
+tab_ep$dp_var <- round(tab_ep$ep_media * sqrt(212), 2)
+```
+
+```{r echo = F}
+# Resultado final
+kable(
+  tab_ep, 
+  col.names = c("Composição", "Erro-padrão $\\bar{X}$", "Desvio-padrão $X$"),
+  align = "c"
+)
+```
+
+Para transformar a matriz de correlações em matriz de covariâncias, basta utilizar o resultado obtido acima, uma vez que, para duas variáveis $X_i$ e $X_j$, a correlação é definida como:
+
+$$r_{ij}=\frac{\operatorname{Cov}(X_i,X_j)} {DP_iDP_j} $$
+
+Reorganizando a equação,
+
+$$\operatorname{Cov}(X_i,X_j) = r_{ij}DP_iDP_j.$$
+
+Ou seja, a covariância entre $X_i$ e $X_j$ pode ser escrita como a correlação entre $X_i$ e $X_j$ multiplicada pelos desvios padrão de $X_i$ e $X_j$.
+
+Abaixo, inseri a matriz de correlações no R e calculei a matriz de covariâncias.
+
+```{r echo = T}
+# Criando a matriz de correlações
+tab_corr <- matrix(
+  c(
+    1.000, 0.890, 0.932, 0.887, 0.914, 0.591, 0.573, 0.688,
+    0.890, 1.000, 0.933, 0.939, 0.882, 0.759, 0.746, 0.836,
+    0.932, 0.933, 1.000, 0.890, 0.905, 0.693, 0.691, 0.758,
+    0.887, 0.939, 0.890, 1.000, 0.819, 0.765, 0.779, 0.839,
+    0.914, 0.882, 0.905, 0.819, 1.000, 0.643, 0.601, 0.653,
+    0.591, 0.759, 0.693, 0.765, 0.643, 1.000, 0.912, 0.818,
+    0.573, 0.746, 0.691, 0.779, 0.601, 0.912, 1.000, 0.856,
+    0.688, 0.836, 0.758, 0.839, 0.653, 0.818, 0.856, 1.000
+  ),
+  nrow = 8,
+  ncol = 8,
+  byrow = TRUE
+)
+
+dimnames(tab_corr) <- list(composicao, composicao)
+
+# Transformando em matriz de covariâncias ------
+
+# Matriz diagonal com os desvios-padrão obtidos no item anterior
+D <- diag(tab_ep$dp_var)
+dimnames(D) <- list(composicao, composicao)
+
+# Transformando a matriz de correlações em matriz de covariâncias
+tab_cov <- D %*% tab_corr %*% D
+
+# Arredondando os resultados
+tab_cov <- round(tab_cov, 2)
+```
+
+```{r echo = F}
+# Exibindo a matriz de covariâncias
+kable(
+  tab_cov,
+  col.names = composicao,
+  row.names = TRUE,
+  align = "c"
+) |> 
+  kable_styling(font_size = 10) |> 
+  row_spec(0, bold = TRUE) |> 
+  column_spec(1, bold = TRUE)
+```
+
+# 1.2 Especificação de modelos de trajetória em lavaan
+
+Na figura fornecida pelo exercício, $A$, $B$, $C$ e $D$ são variáveis manifestas (observadas). $E_C$ e $E_D$ são variáveis latentes, representando os termos de erro das variáveis $C$ e $D$ (variância que não é explicada pelas variáveis preditoras do modelo).
+
+$A$ e $B$ são variáveis **exógenas** (atuam apenas como preditoras), uma vez que nenhuma seta aponta pra elas. Em contrapartida, $C$ e $D$ são variáveis **endógenas**, uma vez que recebem setas de outras variáveis. $C$ atua como mediadora (dependente de $A$ e $B$, mas preditora de $D$). Por fim, $D$ recebe efeitos diretos de $A$ e $C$, e indiretos de $B$.
+
+As setas retas representam efeitos diretos de regressão, com as letras $w$, $x$, $y$ e $z$ sendo os coeficientes (pesos) da regressão. Fixar os pesos dos termos de erro em 1 garante que, para cada variação de 1 unidade no erro, a variável manifesta varie em exatamente 1 unidade da sua própria escala. A seta bidimensional entre $A$ e $B$ mostra que existe covariância entre as variáveis. E, por fim, as setas em $E_C$ e $E_D$ representam as variâncias dos termos de erro, escritas como $\sigma^2_{E_C}$ e $\sigma^2_{E_D}$.
+
+Utilizando a linguagem do pacote `lavaan`, podemos escrever:
+
+$$C \space \sim \space y*B \space + \space w*A$$
+
+$$D \space \sim \space z*C \space + \space x*A$$
+
+$$A \sim\sim B$$
+
+Com $\sim$ indicando regressões diretas, e $\sim\sim$ covariância.
+
+# 1.3 Modelagem de mediação em lavaan
+
+## 1.3.1 Inserção da matriz de covariâncias
+
+Inserindo a matriz de covariâncias no R:
+
+```{r echo = T}
+conceitos <- c("expectativa", "clima", "conteudo", "desempenho")
+
+vet_cov <- c(84.85, 71.28, 18.83, 60.05,
+             71.28, 140.34, -6.25, 84.54,
+             18.83, -6.25, 72.92, 37.18,
+             60.05, 84.54, 37.18, 139.48)
+
+mat_cov <- matrix(vet_cov, nrow = 4)
+dimnames(mat_cov) <- list(conceitos, conceitos)
+```
+
+## 1.3.2 Especificação do modelo de mediação
+
+Especificação do modelo, avaliando efeitos diretos e indiretos das expectativas dos professores sobre o desempenho dos alunos:
+
+```{r echo = T}
+modelo_mediacao <- '
+  # Efeitos diretos
+  clima ~ a1 * expectativa
+  conteudo ~ a2 * expectativa
+  
+  desempenho ~ b1 * clima + b2 * conteudo + c * expectativa
+
+  # Efeitos indiretos
+  ind_clima := a1 * b1
+  ind_conteudo := a2 * b2
+'
+```
+
+## 1.3.3 Estimação e interpretação dos efeitos indiretos
+
+Para estimar e interpretar os efeitos indiretos, podemos ajustar o modelo especificado no item anterior utilizando a função `sem()`, do pacote `lavaan`. Basta inserir a matriz de covariâncias e o valor de $n$, ambos fornecidos no enunciado do exercício.
+
+```{r echo = T, warning = F, message = F}
+# Ajuste do modelo
+ajuste <- sem(modelo_mediacao, 
+              sample.cov = mat_cov, 
+              sample.nobs = 40)
+
+# Visualização dos resultados
+lavaan::summary(ajuste, fit.measures = TRUE, standardized = TRUE, ci = TRUE)
+```
+
+Respondendo à pergunta do exercício, os efeitos indiretos estimados pelo modelo são encontrados na seção *Defined Parameters*, ao final da saída da função `summary()`.
+
+Efeito indireto do clima social (ind_clima): A estimativa do efeito não padronizado é $0,478$ (IC 95%: [0,188; 0,768]), com um efeito padronizado (*Std.all*) de $0,356$. O efeito é estatisticamente significativo ($p = 0,001$).
+
+Efeito indireto do conteúdo coberto (ind_conteudo): A estimativa do efeito não padronizado é $0,118$ (IC 95%: [-0,045; 0,281]), com um efeito padronizado (*Std.all*) de $0,088$. O efeito não apresenta significância estatística ao nível de 5% ($p = 0,155$), o que também é evidenciado pelo intervalo de confiança, que contém zero.
+
+# 1.4 Modelagem com variáveis latentes em lavaan
+
+## 1.4.1 Matriz de covariância
+
+Inserindo a matriz de covariâncias no R:
+
+```{r echo = T}
+conceito <- c("depressao_1", "depressao_2",	"depressao_3", "atv_social", 
+              "quedas", "cronicas", "atv_fisica",	"mobilidade")
+
+vet_cov <- c(0.77,  0.38,  0.39, -0.25,  0.31,  0.24,  -3.16, -0.92,
+             0.38,  0.65,  0.39, -0.32,  0.29,  0.25,  -3.56, -0.88,
+             0.39,  0.39,  0.62, -0.27,  0.26,  0.19,  -2.63, -0.72,
+             -0.25, -0.32, -0.27,  6.09, -0.36, -0.18,   6.09,  0.88,
+             0.31,  0.29,  0.26, -0.36,  7.67,  0.51,  -3.12, -1.49,
+             0.24,  0.25,  0.19, -0.18,  0.51,  1.69,  -4.58, -1.41,
+             -3.16, -3.56, -2.63,  6.09, -3.12, -4.58, 204.79, 16.53,
+             -0.92, -0.88, -0.72,  0.88, -1.49, -1.41,  16.53,  7.24)
+
+mat_cov <- matrix(vet_cov, nrow = 8)
+
+dimnames(mat_cov) <- list(conceito, conceito)
+```
+
+## 1.4.2 Ajuste e interpretação do modelo de equações estruturais
+
+Especificação do modelo, utilizando a matriz de covariâncias e o valor de $n$ fornecidos no exercício, onde $= \sim$ é utilizado para mensurar a má saúde física e psicológica através das variáveis latentes, e $\sim$ para estimar o efeito direto das mesmas sobre a mobilidade dos indivíduos.
+
+```{r echo = T}
+modelo <- '
+  # Modelo de mensuração (variáveis latentes)
+  ma_saude_psico =~ depressao_1 + depressao_2 + depressao_3 + atv_social
+  ma_saude_fisica =~ cronicas + atv_fisica + quedas
+
+  # Modelo estrutural (efeitos diretos)
+  mobilidade ~ ma_saude_psico + ma_saude_fisica
+'
+
+# Ajuste do modelo
+ajuste <- sem(modelo, sample.cov = mat_cov, sample.nobs = 6053)
+
+# Visualização dos resultados
+lavaan::summary(ajuste, standardized = TRUE, fit.measures = TRUE, ci = TRUE)
+```
+
+O modelo estimou um coeficiente de $0,433$ (IC 95%: [0,05; 0,82]) para a má saúde psicológica, e $-4,034$ (IC 95%: [-4,59; -3,47]) para a má saúde física, indicando que ambas afetam a mobilidade pessoal de forma estatisticamente significativa ($p < 0,05$). 
+
+Como as variáveis latentes medem a má saúde (depressão, histórico de quedas e doenças crônicas), o coeficiente de -4,034 mostra que uma saúde física comprometida prejudica a mobilidade dos indivíduos. A cada aumento de 1 unidade no escore de má saúde física, a mobilidade pessoal reduz, em média, 4,034 unidades, mantendo os demais fatores constantes.
+
+Já o coeficiente de 0,433 para a má saúde psicológica é contraintuitivo, indicando que mais problemas psicológicos aumentariam a mobilidade, efeito que pode ter sido gerado pela covariância presente entre as duas variáveis latentes.
+
+De tal forma, considerando também o fato de que o limite inferior do intervalo de confiança para o coeficiente da má saúde psicológica é igual a 0,05 (próximo de 0), concluo que apenas a saúde física é preditiva da mobilidade pessoal, com a ressalva de que a saúde psicológica é correlacionada com a saúde física, influenciando, de certa forma, a mobilidade de forma indireta.
+
+# 1.5 Comparação de efeitos em regressão linear múltipla
+
+Antes de verificar a importância das variáveis, fiz a leitura dos dados e ajustei o modelo de regressão linear múltipla na escala original, confirmando que os coeficientes refletem os valores fornecidos no enunciado:
+
+```{r echo=TRUE}
+# Leitura do conjunto de dados
+World95 <- haven::read_sav("World95.sav")
+
+# Ajuste do modelo de regressão linear múltipla
+modelo_reg <- lm(LIFEEXPF ~ FERTILTY + BABYMORT, data = World95)
+
+# Confirmando se os coeficientes batem com a equação do exercício
+round(coef(modelo_reg), 2)
+```
+
+Para verificar a importância das variáveis independentes, foram utilizados os coeficientes de regressão padronizados, uma vez que *FERTILTY* e *BABYMORT* estão em escalas diferentes.
+
+Assim, a variável independente mais importante é aquela que apresenta o maior valor absoluto do coeficiente $\beta$. Isso indica que uma variação de um desvio-padrão nessa variável está associada à maior variação, em desvios-padrão, na expectativa de vida feminina, mantendo a outra variável constante.
+
+```{r echo=TRUE}
+# Ajuste do modelo com coeficientes padronizados
+modelo_reg_pad <- lm(scale(LIFEEXPF) ~ scale(FERTILTY) + scale(BABYMORT), data = World95)
+
+# Coeficientes padronizados
+round(coef(modelo_reg_pad), 2)
+```
+
+Como o valor absoluto do coeficiente de *BABYMORT* é superior, conclui-se que a mortalidade infantil é a variável mais importante. Mantendo a fertilidade constante, um aumento de um desvio-padrão na mortalidade infantil está associado a uma redução de 0,86 desvio-padrão na expectativa de vida feminina.
+
+Outro critério, dentro das limitações do modelo de regressão, seria comparar os valores do Coeficiente de Determinação ($R^2$), antes e depois da inclusão das variáveis no modelo. O $R^2$ representa a proporção da variabilidade da variável resposta que é explicada pelo modelo ajustado.
+
+```{r echo=TRUE}
+modelo_BABYMORT <- lm(LIFEEXPF ~ BABYMORT, data = World95)
+modelo_FERTILTY <- lm(LIFEEXPF ~ FERTILTY, data = World95)
+
+coef_det_df <- data.frame(
+  BABYMORT = summary(modelo_BABYMORT)$r.squared,
+  FERTILTY = summary(modelo_FERTILTY)$r.squared,
+  AMBAS = summary(modelo_reg)$r.squared
+) %>%
+  round(3)
+```
+
+```{r echo = F}
+kable(coef_det_df)
+```
+
+A inclusão da variável *FERTILTY* no modelo aumenta o $R^2$ de $0,926$ para $0,929$, representando um acréscimo de apenas $0,003$ na proporção da variabilidade de *LIFEEXPF* explicada pelo modelo. De tal forma, dentro desse critério, *BABYMORT* também é mais importante.
+
+# 1.6 Modelos de referência para avaliação de ajuste
+
+Os três modelos a serem ajustados diferem pelo número de restrições impostas à matriz de covariâncias. O modelo de independência total é o mais restritivo, pois assume que as variáveis não possuem covariâncias, apresentando o pior ajuste. O modelo saturado é o menos restritivo, pois estima todas as variâncias e covariâncias, apresentando ajuste perfeito. Já o modelo proposto ocupa uma posição intermediária, buscando um bom ajuste com um número menor de parâmetros.
+
+Leitura dos dados:
+
+```{r echo = T}
+data(HolzingerSwineford1939)
+HolzingerSwineford1939.Pasteur <- subset(HolzingerSwineford1939,
+                                         school == "Pasteur",
+                                         select = x1:x9)
+
+n <- nrow(HolzingerSwineford1939.Pasteur) # 156
+
+covar <- cov(HolzingerSwineford1939.Pasteur)
+```
+
+## 1.6.1 Modelo de independência total
+
+Modelo em que todas as variáveis são independentes entre si (nenhuma covariância é estimada):
+
+```{r echo = TRUE}
+modelo_indep <- '
+  x1 ~~ x1
+  x2 ~~ x2
+  x3 ~~ x3
+  x4 ~~ x4
+  x5 ~~ x5
+  x6 ~~ x6
+  x7 ~~ x7
+  x8 ~~ x8
+  x9 ~~ x9
+'
+
+ajuste_indep <- sem(modelo_indep, data = HolzingerSwineford1939.Pasteur)
+
+fitMeasures(
+  ajuste_indep,
+  c("chisq", "df", "pvalue", "cfi", "tli", "rmsea", "srmr")
+)
+```
+
+Como temos $k=9$ variáveis, o número de variâncias é 9, com total de elementos únicos na matriz de covariância de
+
+$$ \frac{k(k+1)}{2} = \frac{9(10)}{2} = 45.$$
+
+Portanto, o modelo de independência possui $df=45-9=36$ graus de liberdade.
+
+## 1.6.2 Modelo saturado
+
+No modelo saturado, todas as variâncias e covariâncias são estimadas. Como existem 45 elementos únicos na matriz de covariâncias, temos $df=45−45=0$ graus de liberdade.
+
+Ajuste do modelo:
+
+```{r echo = T}
+modelo_sat <- '
+  x1 ~~ x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9
+  x2 ~~ x3 + x4 + x5 + x6 + x7 + x8 + x9
+  x3 ~~ x4 + x5 + x6 + x7 + x8 + x9
+  x4 ~~ x5 + x6 + x7 + x8 + x9
+  x5 ~~ x6 + x7 + x8 + x9
+  x6 ~~ x7 + x8 + x9
+  x7 ~~ x8 + x9
+  x8 ~~ x9
+'
+
+ajuste_sat <- sem(modelo_sat, sample.cov = covar, sample.nobs = n)
+
+fitMeasures(
+  ajuste_sat,
+  c("chisq", "df", "pvalue", "cfi", "tli", "rmsea", "srmr")
+)
+```
+
+## 1.6.3 Modelo proposto
+
+No exemplo de Holzinger-Swineford, existem três fatores latentes: *Visual*, *Textual* e *Speed*, medidos pelas variáveis observadas.
+
+Um modelo de Análise Fatorial Confirmatória (CFA) pode ser escrito como:
+
+```{r echo = T}
+modelo_proposto <- '
+  visual =~ x1 + x2 + x3
+  textual =~ x4 + x5 + x6
+  speed =~ x7 + x8 + x9
+'
+```
+
+Uma vez que *x1*, *x2* e *x3* representam medidas relacionadas à habilidade visual, *x4*, *x5* e *x6* à habilidade textual e *x7*, *x8* e *x9* à velocidade, o modelo proposto agrupa essas variáveis em três fatores latentes.
+
+Ajuste do modelo:
+
+```{r echo = T}
+ajuste_proposto <- cfa(modelo_proposto, data = HolzingerSwineford1939.Pasteur)
+
+fitMeasures(
+  ajuste_proposto,
+  c("chisq", "df", "pvalue", "cfi", "tli", "rmsea", "srmr")
+)
+```
+
+No modelo proposto, os graus de liberdade são calculados como a diferença entre as 45 informações únicas da matriz de covariâncias e os 21 parâmetros (6 cargas fatoriais, 9 variâncias dos erros, 3 variâncias dos fatores e 3 covariâncias entre os fatores) estimados pelo modelo, resultando em **24 graus de liberdade**.
